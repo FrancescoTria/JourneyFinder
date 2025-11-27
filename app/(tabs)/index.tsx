@@ -1,6 +1,7 @@
 // Imports core UI primitives, hooks, and vector icons used to build the mocked homepage.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -10,10 +11,26 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  FlatList,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { supabase } from "../../lib/supabase";
+
+type StopRecord = {
+  id: number;
+  nome?: string;
+  nome_fermata?: string;
+  stazione?: string;
+  descrizione?: string;
+  [key: string]: any;
+};
+
+type PercorsoFermataRecord = {
+  id_percorso: number;
+  id_fermata: number;
+  ordine: number;
+};
 
 // Renders the fully styled "Journey Finder" homepage matching the provided design.
 export default function HomeScreen() {
@@ -24,8 +41,12 @@ export default function HomeScreen() {
   // Keeps track of the departure and arrival stops typed by the user.
   const [departureStop, setDepartureStop] = useState("");
   const [arrivalStop, setArrivalStop] = useState("");
+  // Selected departure stop once the user taps a suggestion.
+  const [selectedDeparture, setSelectedDeparture] = useState<StopRecord | null>(
+    null
+  );
   // Full list of stops loaded from the "fermate" table on Supabase.
-  const [stops, setStops] = useState<any[]>([]);
+  const [stops, setStops] = useState<StopRecord[]>([]);
   // Tracks which stop field is currently focused, so we know which suggestions to show.
   const [activeStopField, setActiveStopField] = useState<
     "departure" | "arrival" | null
@@ -33,6 +54,12 @@ export default function HomeScreen() {
   // Basic loading / error state for the stop suggestions.
   const [loadingStops, setLoadingStops] = useState(false);
   const [stopsError, setStopsError] = useState<string | null>(null);
+  // List of arrival suggestions tied to the selected departure stop.
+  const [arrivalOptions, setArrivalOptions] = useState<StopRecord[]>([]);
+  const [loadingArrivalOptions, setLoadingArrivalOptions] = useState(false);
+  const [arrivalOptionsError, setArrivalOptionsError] = useState<string | null>(
+    null
+  );
   // Ref to the ScrollView so we can programmatically scroll when suggestions appear.
   const scrollViewRef = useRef<ScrollView>(null);
   // Ref to measure the position of the stop inputs container.
@@ -86,6 +113,16 @@ export default function HomeScreen() {
     fetchStops();
   }, []);
 
+  // Map helpful to resolve stop metadata by id without re-filtering arrays.
+  const stopsById = useMemo(() => {
+    return stops.reduce((acc, stop) => {
+      if (typeof stop.id === "number") {
+        acc.set(stop.id, stop);
+      }
+      return acc;
+    }, new Map<number, StopRecord>());
+  }, [stops]);
+
   // Returns the display name for a single stop record, trying a few common column names.
   const getStopName = useCallback((stop: any) => {
     return (
@@ -97,23 +134,150 @@ export default function HomeScreen() {
     );
   }, []);
 
+  // Loads all valid arrival stops for a given departure by looking at percorsi_fermate.
+  // Logica: per ogni percorso che passa dalla fermata di andata, trova tutte le fermate
+  // dello stesso percorso con ordine maggiore rispetto a quello della fermata di andata.
+  const loadArrivalOptions = useCallback(
+    async (stop: StopRecord | null) => {
+      if (!stop?.id) {
+        setArrivalOptions([]);
+        return;
+      }
+
+      try {
+        setLoadingArrivalOptions(true);
+        setArrivalOptionsError(null);
+
+        // Step 1: Trova tutti i record in percorsi_fermate per la fermata di andata
+        // Questo ci dà id_percorso e ordine per ogni percorso che passa da questa fermata
+        const { data: departureSegments, error: departureError } =
+          await supabase
+            .from("percorsi_fermate")
+            .select("id_percorso, ordine")
+            .eq("id_fermata", stop.id);
+
+        if (departureError) {
+          throw departureError;
+        }
+
+        if (!departureSegments || departureSegments.length === 0) {
+          setArrivalOptions([]);
+          return;
+        }
+
+        // Step 2: Per ogni percorso trovato, cerca tutte le fermate con ordine maggiore
+        const validStopIds: number[] = [];
+        const seen = new Set<number>();
+
+        for (const departureSegment of departureSegments) {
+          const { id_percorso, ordine: ordineAndata } = departureSegment;
+
+          // Trova tutte le fermate dello stesso percorso con ordine > ordineAndata
+          const { data: arrivalSegments, error: arrivalError } = await supabase
+            .from("percorsi_fermate")
+            .select("id_fermata")
+            .eq("id_percorso", id_percorso)
+            .gt("ordine", ordineAndata);
+
+          if (arrivalError) {
+            throw arrivalError;
+          }
+
+          // Aggiungi le fermate trovate alla lista (evitando duplicati)
+          if (arrivalSegments) {
+            arrivalSegments.forEach((segment: { id_fermata: number }) => {
+              if (!seen.has(segment.id_fermata)) {
+                seen.add(segment.id_fermata);
+                validStopIds.push(segment.id_fermata);
+              }
+            });
+          }
+        }
+
+        // Step 3: Risolvi gli ID delle fermate con i dati completi
+        const resolvedStops = validStopIds
+          .map((id) => stopsById.get(id))
+          .filter(Boolean) as StopRecord[];
+
+        setArrivalOptions(resolvedStops);
+      } catch (error: any) {
+        setArrivalOptionsError(
+          error.message ??
+            "Impossibile ottenere le fermate di arrivo disponibili."
+        );
+        setArrivalOptions([]);
+      } finally {
+        setLoadingArrivalOptions(false);
+      }
+    },
+    [stopsById]
+  );
+
+  // Handles manual edits on the departure field resetting the dependent arrival list.
+  const handleDepartureTextChange = useCallback((text: string) => {
+    setDepartureStop(text);
+    setSelectedDeparture(null);
+    setArrivalStop("");
+    setArrivalOptions([]);
+    setArrivalOptionsError(null);
+  }, []);
+
+  const handleArrivalTextChange = useCallback((text: string) => {
+    setArrivalStop(text);
+  }, []);
+
+  const handleSuggestionPress = useCallback(
+    (stop: StopRecord) => {
+      if (!activeStopField) return;
+
+      const stopName = String(getStopName(stop));
+
+      if (activeStopField === "departure") {
+        setDepartureStop(stopName);
+        setSelectedDeparture(stop);
+        setActiveStopField(null);
+        setArrivalStop("");
+        setArrivalOptions([]);
+        setArrivalOptionsError(null);
+        loadArrivalOptions(stop);
+      } else {
+        setArrivalStop(stopName);
+        setActiveStopField(null);
+      }
+    },
+    [activeStopField, getStopName, loadArrivalOptions]
+  );
+
   // Computes suggestions based on the active input (departure/arrival) and its current text.
   const stopSuggestions = useMemo(() => {
     if (!activeStopField) return [];
+
+    if (activeStopField === "arrival" && !selectedDeparture) {
+      return [];
+    }
+
+    const source = activeStopField === "departure" ? stops : arrivalOptions;
 
     const term = (activeStopField === "departure" ? departureStop : arrivalStop)
       .trim()
       .toLowerCase();
 
     if (!term) {
-      // Show the first handful of stops when the field is empty.
-      return stops.slice(0, 8);
+      return source;
     }
 
-    return stops
-      .filter((stop) => String(getStopName(stop)).toLowerCase().includes(term))
-      .slice(0, 8);
-  }, [activeStopField, arrivalStop, departureStop, getStopName, stops]);
+    return source.filter((stop) =>
+      String(getStopName(stop)).toLowerCase().includes(term)
+    );
+  }, [
+    activeStopField,
+    arrivalOptions,
+    arrivalStop,
+    departureStop,
+    getStopName,
+    selectedDeparture,
+    stops,
+  ]);
 
   // Opens the native date picker (platform specific) for the departure date.
   const openDeparturePicker = useCallback(() => {
@@ -131,6 +295,9 @@ export default function HomeScreen() {
       },
     });
   }, [departureDate]);
+
+  const arrivalRequiresDeparture =
+    activeStopField === "arrival" && !selectedDeparture;
 
   // Automatically scrolls to show the suggestions when a stop field is focused.
   useEffect(() => {
@@ -227,10 +394,16 @@ export default function HomeScreen() {
                         placeholder="Departure"
                         placeholderTextColor="#94a3b8"
                         value={departureStop}
-                        onChangeText={setDepartureStop}
+                        onChangeText={handleDepartureTextChange}
                         onFocus={() => setActiveStopField("departure")}
-                        // When focus is lost, hide suggestions so they don't block other tap targets.
-                        onBlur={() => setActiveStopField(null)}
+                        // Ritardiamo la chiusura per permettere il tap sui suggerimenti
+                        onBlur={() =>
+                          setTimeout(() => {
+                            setActiveStopField((current) =>
+                              current === "departure" ? null : current
+                            );
+                          }, 150)
+                        }
                       />
                     </View>
 
@@ -241,36 +414,65 @@ export default function HomeScreen() {
                         placeholder="Arrival"
                         placeholderTextColor="#94a3b8"
                         value={arrivalStop}
-                        onChangeText={setArrivalStop}
+                        onChangeText={handleArrivalTextChange}
                         onFocus={() => setActiveStopField("arrival")}
-                        // When focus is lost, hide suggestions so they don't block other tap targets.
-                        onBlur={() => setActiveStopField(null)}
+                        onBlur={() =>
+                          setTimeout(() => {
+                            setActiveStopField((current) =>
+                              current === "arrival" ? null : current
+                            );
+                          }, 150)
+                        }
                       />
                     </View>
                   </View>
 
                   {/* Inline suggestion list behaving like a select dropdown, overlaying background */}
-                  {activeStopField && stopSuggestions.length > 0 && (
+                  {activeStopField && (
                     <View style={styles.suggestionBox}>
-                      {stopSuggestions.map((stop: any, index: number) => {
-                        const name = String(getStopName(stop));
-                        return (
-                          <TouchableOpacity
-                            key={`${name}-${index}`}
-                            style={styles.suggestionItem}
-                            onPress={() => {
-                              if (activeStopField === "departure") {
-                                setDepartureStop(name);
-                              } else {
-                                setArrivalStop(name);
-                              }
-                              setActiveStopField(null);
-                            }}
-                          >
-                            <Text style={styles.suggestionText}>{name}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
+                      {arrivalRequiresDeparture ? (
+                        <View style={styles.suggestionEmpty}>
+                          <Text style={styles.suggestionEmptyText}>
+                            Seleziona prima una fermata di partenza.
+                          </Text>
+                        </View>
+                      ) : (activeStopField === "departure" && loadingStops) ||
+                        (activeStopField === "arrival" &&
+                          loadingArrivalOptions) ? (
+                        <View style={styles.suggestionLoader}>
+                          <ActivityIndicator color="#38bdf8" size="small" />
+                          <Text style={styles.suggestionLoaderText}>
+                            Caricamento suggerimenti...
+                          </Text>
+                        </View>
+                      ) : stopSuggestions.length > 0 ? (
+                        <ScrollView
+                          nestedScrollEnabled
+                          keyboardShouldPersistTaps="handled"
+                          contentContainerStyle={styles.suggestionList}
+                        >
+                          {stopSuggestions.map((item) => {
+                            const name = String(getStopName(item));
+                            return (
+                              <TouchableOpacity
+                                key={String(item?.id ?? name)}
+                                style={styles.suggestionItem}
+                                onPress={() => handleSuggestionPress(item)}
+                              >
+                                <Text style={styles.suggestionText}>
+                                  {name}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.suggestionEmpty}>
+                          <Text style={styles.suggestionEmptyText}>
+                            Nessun suggerimento disponibile.
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   )}
                 </View>
@@ -278,6 +480,9 @@ export default function HomeScreen() {
                 {/* Shows a small helper text when stop suggestions fail to load */}
                 {stopsError && (
                   <Text style={styles.errorText}>{stopsError}</Text>
+                )}
+                {arrivalOptionsError && (
+                  <Text style={styles.errorText}>{arrivalOptionsError}</Text>
                 )}
               </View>
 
@@ -448,6 +653,9 @@ const styles = StyleSheet.create({
     zIndex: 20,
     elevation: 20,
   },
+  suggestionList: {
+    paddingVertical: 4,
+  },
   suggestionItem: {
     paddingVertical: 10,
     paddingHorizontal: 12,
@@ -457,6 +665,26 @@ const styles = StyleSheet.create({
   suggestionText: {
     color: "#e5e7eb",
     fontSize: 14,
+  },
+  suggestionLoader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    gap: 8,
+  },
+  suggestionLoaderText: {
+    color: "#94a3b8",
+    fontSize: 13,
+  },
+  suggestionEmpty: {
+    paddingVertical: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  suggestionEmptyText: {
+    color: "#94a3b8",
+    fontSize: 13,
   },
   resultsContainer: {
     marginTop: 24,
