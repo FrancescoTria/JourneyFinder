@@ -29,9 +29,18 @@ export default function TabLayout() {
       <Tabs.Screen
         name="explore"
         options={{
-          title: "Explore",
+          title: "Esplora",
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="paperplane.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="journeys"
+        options={{
+          title: "Viaggi",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="trip-origin" color={color} />
           ),
         }}
       />

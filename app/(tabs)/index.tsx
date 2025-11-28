@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
+import { useRouter } from "expo-router";
 import { supabase } from "../../lib/supabase";
 
 type StopRecord = {
@@ -38,11 +39,18 @@ export default function HomeScreen() {
   // By default this is set to "today" so the initial picker value matches the current day.
   const [departureDate, setDepartureDate] = useState<Date | null>(new Date());
 
+  // Router for navigation
+  const router = useRouter();
+
   // Keeps track of the departure and arrival stops typed by the user.
   const [departureStop, setDepartureStop] = useState("");
   const [arrivalStop, setArrivalStop] = useState("");
   // Selected departure stop once the user taps a suggestion.
   const [selectedDeparture, setSelectedDeparture] = useState<StopRecord | null>(
+    null
+  );
+  // Selected arrival stop once the user taps a suggestion.
+  const [selectedArrival, setSelectedArrival] = useState<StopRecord | null>(
     null
   );
   // Full list of stops loaded from the "fermate" table on Supabase.
@@ -69,9 +77,9 @@ export default function HomeScreen() {
 
   // Formats dates in the "Aug 5, 2024" style while handling null values gracefully.
   const formatDate = useCallback((date: Date | null) => {
-    if (!date) return "Select date";
+    if (!date) return "Seleziona una data";
 
-    return new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat("it-IT", {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -218,12 +226,14 @@ export default function HomeScreen() {
     setDepartureStop(text);
     setSelectedDeparture(null);
     setArrivalStop("");
+    setSelectedArrival(null);
     setArrivalOptions([]);
     setArrivalOptionsError(null);
   }, []);
 
   const handleArrivalTextChange = useCallback((text: string) => {
     setArrivalStop(text);
+    setSelectedArrival(null);
   }, []);
 
   const handleSuggestionPress = useCallback(
@@ -242,6 +252,7 @@ export default function HomeScreen() {
         loadArrivalOptions(stop);
       } else {
         setArrivalStop(stopName);
+        setSelectedArrival(stop);
         setActiveStopField(null);
       }
     },
@@ -350,32 +361,33 @@ export default function HomeScreen() {
                   <Text style={styles.cardTitle}>Journey Finder</Text>
                 </View>
                 <Text style={styles.cardSubtitle}>
-                  Historical Journey Search
+                  Analisi storica dei viaggi
                 </Text>
                 <Text style={styles.cardBody}>
-                  Use the filters below to find and analyze past train journeys.
+                  Usa i filtri qui sotto per cercare e analizzare i viaggi
+                  passati.
                 </Text>
               </View>
 
               {/* Departure date selector used as an additional search criterion */}
               <View style={[styles.formGroup, styles.dateGroup]}>
-                <Text style={styles.formLabel}>Departure date</Text>
+                <Text style={styles.formLabel}>Data di partenza</Text>
                 <TouchableOpacity
                   style={styles.datePicker}
                   onPress={openDeparturePicker}
                 >
-                  <Ionicons name="calendar" size={18} color="#e2e8f0" />
+                  <Ionicons name="calendar" size={18} color="#20B2AA" />
                   <View style={styles.dateTextWrapper}>
-                    <Text style={styles.dateLabel}>Departure</Text>
+                    <Text style={styles.dateLabel}>Partenza</Text>
                     <Text style={styles.dateText}>{departureLabel}</Text>
                   </View>
-                  <Ionicons name="chevron-down" size={18} color="#94a3b8" />
+                  <Ionicons name="chevron-down" size={18} color="#D4AF37" />
                 </TouchableOpacity>
               </View>
 
               {/* Search input block with magnifier icon and departure/arrival stops */}
               <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Search by Stops</Text>
+                <Text style={styles.formLabel}>Cerca per fermate</Text>
 
                 {/* Container keeps the suggestion dropdown positioned over the card, not pushing layout */}
                 <View
@@ -391,7 +403,7 @@ export default function HomeScreen() {
                     <View style={styles.inputRow}>
                       <TextInput
                         style={styles.textInput}
-                        placeholder="Departure"
+                        placeholder="Partenza"
                         placeholderTextColor="#94a3b8"
                         value={departureStop}
                         onChangeText={handleDepartureTextChange}
@@ -411,7 +423,7 @@ export default function HomeScreen() {
                     <View style={styles.inputRow}>
                       <TextInput
                         style={styles.textInput}
-                        placeholder="Arrival"
+                        placeholder="Arrivo"
                         placeholderTextColor="#94a3b8"
                         value={arrivalStop}
                         onChangeText={handleArrivalTextChange}
@@ -440,7 +452,7 @@ export default function HomeScreen() {
                         (activeStopField === "arrival" &&
                           loadingArrivalOptions) ? (
                         <View style={styles.suggestionLoader}>
-                          <ActivityIndicator color="#38bdf8" size="small" />
+                          <ActivityIndicator color="#20B2AA" size="small" />
                           <Text style={styles.suggestionLoaderText}>
                             Caricamento suggerimenti...
                           </Text>
@@ -486,9 +498,31 @@ export default function HomeScreen() {
                 )}
               </View>
 
-              {/* Primary call-to-action button (per ora è solo estetico, senza logica di backend) */}
-              <TouchableOpacity style={styles.primaryButton}>
-                <Text style={styles.primaryButtonText}>Search</Text>
+              {/* Primary call-to-action button */}
+              <TouchableOpacity
+                style={[
+                  styles.primaryButton,
+                  (!selectedDeparture || !selectedArrival || !departureDate) &&
+                    styles.primaryButtonDisabled,
+                ]}
+                onPress={() => {
+                  if (selectedDeparture && selectedArrival && departureDate) {
+                    // Navigate to journeys screen with search parameters
+                    router.push({
+                      pathname: "/(tabs)/journeys",
+                      params: {
+                        departureStopId: selectedDeparture.id.toString(),
+                        arrivalStopId: selectedArrival.id.toString(),
+                        departureDate: departureDate.toISOString(),
+                      },
+                    });
+                  }
+                }}
+                disabled={
+                  !selectedDeparture || !selectedArrival || !departureDate
+                }
+              >
+                <Text style={styles.primaryButtonText}>Cerca</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -502,8 +536,8 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    // Deep blue background gives more contrast and a premium dashboard feel.
-    backgroundColor: "#020617",
+    // Rosso principale come sfondo
+    backgroundColor: "#C41E3A",
   },
   keyboardAvoidingView: {
     flex: 1,
@@ -515,18 +549,20 @@ const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
     padding: 17,
-    backgroundColor: "#BBC1D9",
+    backgroundColor: "#C41E3A",
     justifyContent: "center",
     alignItems: "center",
     minHeight: "100%",
   },
   card: {
-    backgroundColor: "#0f172a",
+    backgroundColor: "#FFF8DC",
     borderRadius: 28,
     padding: 28,
     gap: 24,
+    borderWidth: 3,
+    borderColor: "#D4AF37",
     shadowColor: "#000",
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.5,
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 12 },
     elevation: 10,
@@ -546,25 +582,27 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: "#38bdf8",
+    backgroundColor: "#20B2AA",
     alignItems: "center",
     justifyContent: "center",
   },
   cardTitle: {
-    color: "#f8fafc",
-    fontSize: 20,
+    color: "#C41E3A",
+    fontSize: 28,
     fontWeight: "700",
   },
   cardSubtitle: {
-    color: "#f8fafc",
+    color: "#2F2F2F",
     fontSize: 21,
     fontWeight: "800",
+    textAlign: "center",
   },
   cardBody: {
     paddingTop: 10,
-    color: "#cbd5f5",
+    color: "#2F2F2F",
     fontSize: 15,
     lineHeight: 22,
+    textAlign: "center",
   },
   formGroup: {
     gap: 8,
@@ -581,7 +619,7 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   formLabel: {
-    color: "#94a3b8",
+    color: "#2F2F2F",
     fontSize: 14,
     fontWeight: "600",
   },
@@ -589,27 +627,27 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#0b1220",
+    backgroundColor: "#FFFFFF",
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#1e293b",
+    borderWidth: 2,
+    borderColor: "#D4AF37",
     paddingHorizontal: 14,
     height: 56,
     gap: 10,
   },
   textInput: {
     flex: 1,
-    color: "#f8fafc",
-    fontSize: 15,
+    color: "#2F2F2F",
+    fontSize: 13,
   },
   datePicker: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     borderRadius: 14,
-    backgroundColor: "#0b1220",
-    borderWidth: 1,
-    borderColor: "#1e293b",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "#D4AF37",
     paddingHorizontal: 14,
     height: 56,
     marginTop: 4,
@@ -619,23 +657,30 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   dateLabel: {
-    color: "#94a3b8",
+    color: "#2F2F2F",
     fontSize: 12,
     marginBottom: 2,
   },
   dateText: {
-    color: "#f8fafc",
+    color: "#000000",
     fontSize: 15,
     fontWeight: "600",
   },
   primaryButton: {
-    backgroundColor: "#1d4ed8",
+    backgroundColor: "#20B2AA",
     borderRadius: 16,
     alignItems: "center",
     paddingVertical: 14,
+    borderWidth: 2,
+    borderColor: "#D4AF37",
+  },
+  primaryButtonDisabled: {
+    backgroundColor: "#94a3b8",
+    opacity: 0.6,
+    borderColor: "#94a3b8",
   },
   primaryButtonText: {
-    color: "#f8fafc",
+    color: "#FFFFFF",
     fontSize: 17,
     fontWeight: "700",
   },
@@ -644,10 +689,10 @@ const styles = StyleSheet.create({
     top: 64,
     left: 0,
     right: 0,
-    backgroundColor: "#020617",
+    backgroundColor: "#FFF8DC",
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#1e293b",
+    borderWidth: 2,
+    borderColor: "#D4AF37",
     maxHeight: 200,
     overflow: "hidden",
     zIndex: 20,
@@ -660,10 +705,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#1f2937",
+    borderBottomColor: "#D4AF37",
   },
   suggestionText: {
-    color: "#e5e7eb",
+    color: "#2F2F2F",
     fontSize: 14,
   },
   suggestionLoader: {
@@ -674,7 +719,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   suggestionLoaderText: {
-    color: "#94a3b8",
+    color: "#2F2F2F",
     fontSize: 13,
   },
   suggestionEmpty: {
@@ -683,7 +728,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   suggestionEmptyText: {
-    color: "#94a3b8",
+    color: "#2F2F2F",
     fontSize: 13,
   },
   resultsContainer: {
@@ -710,7 +755,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     marginTop: 12,
-    color: "#f87171",
+    color: "#C41E3A",
     fontSize: 13,
   },
 });
